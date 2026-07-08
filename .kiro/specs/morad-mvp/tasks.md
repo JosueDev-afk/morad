@@ -1,0 +1,146 @@
+# Implementation Plan — MORAD MVP
+
+- [x] 1. Configuración base del proyecto
+  - Inicializar proyecto FastAPI con `requirements.txt` (fastapi, uvicorn, sqlalchemy, alembic, psycopg2-binary, python-jose, passlib[bcrypt], pydantic-settings, httpx)
+  - Inicializar proyecto React + TypeScript con Vite; instalar shadcn/ui, tailwindcss, @tanstack/react-query, react-hook-form, @hookform/resolvers, zod, zustand, axios, react-router-dom, lucide-react
+  - Configurar variables de colores MORAD en `tailwind.config.ts` (`--morad-turquoise`, `--morad-purple`, `--morad-pink`, `--morad-gray`)
+  - Crear `backend/.env.example` y `backend/app/config.py` con pydantic-settings (DATABASE_URL, SECRET_KEY, ACCESS_TOKEN_EXPIRE_MINUTES, REFRESH_TOKEN_EXPIRE_DAYS)
+  - _Requirements: 11.1, 11.2_
+
+- [x] 2. Modelos de base de datos y migraciones
+- [x] 2.1 Crear modelos SQLAlchemy
+  - Implementar `users`, `therapists`, `availability_slots`, `appointments`, `ratings`, `verification_codes` en `app/models/`
+  - Agregar índice UNIQUE en `availability_slots(therapist_id, start_time)` y constraint en `appointments(slot_id)` para activas
+  - _Requirements: 1.8, 3.3_
+- [x] 2.2 Configurar Alembic y generar migración inicial
+  - Configurar `alembic.ini` y `env.py`; generar y aplicar la primera migración
+  - _Requirements: 2.1_
+- [x] 2.3 Tests de modelos e integridad de constraints
+  - Verificar que el constraint UNIQUE en slots y la FK de appointments funcionan correctamente
+  - _Requirements: 3.3, 5.1_
+
+- [x] 3. Autenticación JWT
+- [x] 3.1 Implementar registro y login
+  - Crear `app/routers/auth.py` con `POST /api/auth/register` y `POST /api/auth/login`
+  - `register`: validar email único, hashear password con bcrypt, `email_verified=True`, devolver tokens
+  - `login`: verificar credenciales, emitir access token (15 min) + refresh token (7 días)
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.9_
+- [x] 3.2 Implementar refresh y logout
+  - `POST /api/auth/refresh`: validar refresh token, emitir nuevo access token
+  - `POST /api/auth/logout`: invalidar refresh token (campo en BD o lista en memoria)
+  - _Requirements: 1.6, 1.7_
+- [x] 3.3 Crear dependency `get_current_user` y `require_role`
+  - `dependencies.py`: extraer y validar JWT del header, retornar usuario; `require_role(roles)` para proteger endpoints
+  - _Requirements: 10.1, 10.2, 10.3, 10.4_
+- [x] 3.4 Tests de autenticación
+  - Probar registro duplicado, login inválido, acceso con token expirado, acceso con rol incorrecto
+  - _Requirements: 1.2, 1.5, 10.1_
+
+- [x] 4. Frontend — Autenticación y sesión
+- [x] 4.1 Configurar Axios client y Zustand auth store
+  - `src/api/client.ts`: instancia Axios con interceptor para adjuntar access token y manejar refresh automático en 401
+  - `src/store/authStore.ts`: estado Zustand con `user`, `accessToken`, `login()`, `logout()`
+  - _Requirements: 1.4, 1.6_
+- [x] 4.2 Implementar páginas Register y Login
+  - Formularios con React Hook Form + Zod; llamar a los endpoints de auth; redirigir según rol tras login
+  - Mostrar errores de validación inline y errores de API via toast
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+- [x] 4.3 Implementar rutas protegidas por rol
+  - `ProtectedRoute` component que verifica token y rol; redirige a `/login` si no autenticado
+  - _Requirements: 10.1, 10.2, 10.3_
+
+- [x] 5. Slots de disponibilidad — Backend
+- [x] 5.1 Implementar CRUD de slots
+  - `app/routers/slots.py`: `GET /api/slots` (filtro por fecha y terapeuta, solo futuros y activos), `POST`, `PUT`, `DELETE` restringidos a admin
+  - Validar solapamiento en `SlotService` antes de crear/editar
+  - Rechazar delete/edit si el slot tiene una cita `confirmed`
+  - _Requirements: 2.1, 2.2, 5.1, 5.2, 5.3, 5.4, 5.5_
+- [x]* 5.2 Tests del servicio de slots
+  - Probar creación con solapamiento, eliminación de slot reservado
+  - _Requirements: 5.1, 5.2, 5.3_
+
+- [x] 6. Reserva de citas — Backend
+- [x] 6.1 Implementar servicio de reserva
+  - `AppointmentService.create()`: verificar límite de 2 citas activas del paciente, hacer `SELECT ... FOR UPDATE` en el slot, crear appointment en transacción
+  - Retornar 409 si slot ya tomado, 422 si límite alcanzado
+  - _Requirements: 3.1, 3.2, 3.3_
+- [x] 6.2 Implementar servicio de cancelación
+  - `CancellationService.cancel()`: calcular fee según política (≥24h → 0%, 6-24h → 50%, <6h → 100%), cortesía si primera cancelación; liberar slot; actualizar status
+  - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6_
+- [x] 6.3 Implementar servicio de reprogramación
+  - `RescheduleService.reschedule()`: en una sola transacción, cancelar cita original + crear nueva en slot elegido
+  - _Requirements: 4.7_
+- [x] 6.4 Exponer endpoints de appointments
+  - `GET /api/appointments` (filtrado por rol), `POST`, `POST /{id}/cancel`, `POST /{id}/reschedule`, `PATCH /{id}/status`
+  - _Requirements: 3.1, 4.5, 7.1_
+- [x]* 6.5 Tests del ciclo de citas
+  - Probar reserva con slot libre, doble reserva simultánea, cancelación con fee, reprogramación atómica
+  - _Requirements: 3.2, 3.3, 4.1, 4.4, 4.7_
+
+- [x] 7. Frontend — Flujo paciente (reserva, mis citas, cancelar, reprogramar)
+- [x] 7.1 Página "Reservar cita" con SlotPicker
+  - Vista con selector de fecha (deshabilitar pasadas), filtro por terapeuta, lista de slots disponibles
+  - Al seleccionar slot: formulario de confirmación (tipo de servicio, notas) via React Hook Form + Zod
+  - Llamar a `POST /api/appointments`; mostrar toast de éxito o error específico ("ese horario ya no está disponible")
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 3.1, 3.2, 3.3, 3.4, 3.5_
+- [x] 7.2 Página "Mis citas" con AppointmentCard
+  - Listar citas del paciente con estado visible; acciones según estado: cancelar (si no completed), reprogramar, calificar (si completed y sin rating)
+  - Invalidar query de appointments tras mutación con TanStack Query
+  - _Requirements: 3.4, 4.6, 8.1_
+- [x] 7.3 Flujo de cancelación con modal de confirmación
+  - Dialog que muestra el fee calculado (llamar al backend antes de confirmar), botón confirmar cancela; toast de confirmación
+  - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.8_
+- [x] 7.4 Flujo de reprogramación
+  - Dialog con SlotPicker embebido; confirmar llama a `POST /{id}/reschedule`; toast de éxito
+  - _Requirements: 4.7, 4.8_
+
+- [ ] 8. Calificación post-cita
+- [x] 8.1 Endpoint de ratings en backend
+  - `POST /api/ratings`: validar que appointment es `completed` y no tiene rating; guardar; 
+  - `GET /api/ratings`: solo admin, retornar todas las calificaciones con datos del appointment
+  - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
+- [x] 8.2 Componente RatingModal en frontend
+  - Dialog con selector de 1-5 estrellas (iconos lucide-react) + textarea (máx 500 chars) + validación Zod
+  - Llamar a `POST /api/ratings`; deshabilitar el botón de calificar tras éxito; toast de confirmación
+  - _Requirements: 8.1, 8.2, 8.3_
+
+- [x] 9. Agenda del fisioterapeuta
+- [x] 9.1 Endpoint de agenda del terapeuta
+  - `GET /api/appointments` con rol therapist retorna solo sus citas; incluir slots libres del día en la respuesta;
+  - Endpoint `GET /api/appointments/{id}` incluye historial de citas previas del paciente con ese terapeuta
+  - _Requirements: 7.1, 7.2, 7.3, 7.4_
+- [x] 9.2 Página de agenda del terapeuta en frontend
+  - Vista por fecha con lista cronológica de citas + slots libres como "disponible"
+  - Click en cita abre AppointmentDetailModal: nombre, teléfono, email, notas, historial previo
+  - Botón "Actualizar" para refrescar manualmente (TanStack Query refetch)
+  - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
+
+- [x] 10. Gestión de horarios — Admin frontend
+- [x] 10.1 Página de gestión de slots con vistas semanal y mensual
+  - Tabs "Semana" / "Mes" con grid de slots por terapeuta; selector de terapeuta
+  - Formulario de creación de slot (fecha, hora inicio, hora fin) con React Hook Form + Zod
+  - Llamar a CRUD de slots; mostrar errores de solapamiento o slot en uso
+  - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
+
+- [x] 11. Reportes y métricas — Admin
+- [x] 11.1 Endpoint de reportes con exportación CSV
+  - `GET /api/reports/appointments`: filtros fecha y terapeuta; retornar JSON o CSV (streaming response)
+  - Conteo por estado: confirmed, completed, cancelled, no_show
+  - _Requirements: 6.1, 6.2, 6.3, 6.4_
+- [x] 11.2 Endpoint de métricas anonimizadas
+  - `GET /api/metrics/dashboard`: total pacientes, activos último mes, distribución por servicio, por estado, por rango de edad
+  - Sin ningún campo PII en la respuesta
+  - _Requirements: 9.1, 9.2, 9.3_
+- [x] 11.3 Páginas de reportes y métricas en frontend
+  - ReportTable: filtros de fecha y terapeuta, tabla con conteos, botón "Exportar CSV" que dispara descarga
+  - MetricsDashboard: cards con totales y gráficas simples (usando shadcn + datos del endpoint)
+  - _Requirements: 6.1, 6.2, 6.3, 6.4, 9.1, 9.2_
+
+- [x] 12. Seed data y README
+- [x] 12.1 Implementar script de seed
+  - `backend/app/seed.py`: crear 1 admin, 2 terapeutas, 5 pacientes, slots próximos 30 días, citas en todos los estados, 2+ ratings
+  - _Requirements: 12.1, 12.2_
+- [x] 12.2 Escribir README con instrucciones de setup
+  - Instrucciones para levantar backend (venv, alembic upgrade, uvicorn) y frontend (npm install, npm run dev)
+  - Incluir credenciales del seed para probar cada rol
+  - _Requirements: 12.1_

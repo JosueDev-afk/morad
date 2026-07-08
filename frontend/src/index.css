@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --color-morad-turquoise: #66cccc;
+  --color-morad-purple: #a58bdb;
+  --color-morad-pink: #da39ef;
+  --color-morad-gray: #545454;
+}
+
+:root {
+  font-family: system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #ffffff;
+  color: #545454;
+}
+
+body {
+  margin: 0;
+}
